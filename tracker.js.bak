@@ -87,8 +87,30 @@ async function runApiDebug() {
   };
   
   // Initialize Telegram bot
-  const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  let bot;
+  let chatId;
+  
+  try {
+    console.log('Telegram bot token present:', !!process.env.TELEGRAM_BOT_TOKEN);
+    console.log('Telegram chat ID present:', !!process.env.TELEGRAM_CHAT_ID);
+    
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+      chatId = process.env.TELEGRAM_CHAT_ID;
+      console.log('Telegram bot initialized successfully');
+      
+      // Send a test message on startup if desired
+      if (process.env.SEND_STARTUP_MESSAGE === 'true') {
+        bot.sendMessage(chatId, 'Hyperliquid order tracker started successfully!')
+          .then(() => console.log('Startup message sent successfully'))
+          .catch(err => console.error('Error sending startup message:', err.message));
+      }
+    } else {
+      console.log('Telegram credentials missing or incomplete. Alerts will be logged but not sent.');
+    }
+  } catch (error) {
+    console.error('Error initializing Telegram bot:', error.message);
+  }
   
   // Store previously seen orders to avoid duplicate alerts
   let seenOrders = {};

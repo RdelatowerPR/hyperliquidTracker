@@ -152,7 +152,7 @@ async function fetchMarketData() {
     // Current reliable market prices (as of script creation)
     // These will be used instead of the API values that appear to be in wrong format
     const currentPrices = {
-      'BTC': 65000,
+      'BTC': 80000,
       'ETH': 1950,
       'SOL': 145,
       'AVAX': 25,
@@ -176,7 +176,7 @@ async function fetchMarketData() {
     
     // Return fixed prices if API fails
     return {
-      'BTC': 65000,
+      'BTC': 80000,
       'ETH': 1950,
       'SOL': 145,
       'AVAX': 25,
@@ -185,7 +185,7 @@ async function fetchMarketData() {
       'MATIC': 0.65,
       'XRP': 0.52,
       'LINK': 13.5,
-      '@1': 65000, // BTC
+      '@1': 80000, // BTC
       '@2': 1950,  // ETH
       '@3': 145,   // SOL
       '@4': 25,    // AVAX
@@ -251,9 +251,9 @@ function calculateOrderValue(order, marketData) {
   if (!price) {
     const fallbacks = {
       'ETH': 1950,
-      'BTC': 65000,
+      'BTC': 80000,
       'SOL': 145,
-      '1': 65000, // BTC
+      '1': 80000, // BTC
       '2': 1950,  // ETH
       '3': 145    // SOL
     };

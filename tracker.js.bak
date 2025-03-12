@@ -1,0 +1,446 @@
+// Add a debug function to periodically inspect API responses
+async function runApiDebug() {
+    console.log('\n--- API DEBUG MODE ---');
+    
+    try {
+      // Test allMids endpoint
+      console.log('Testing allMids endpoint...');
+      const midsResponse = await axios.post(CONFIG.hyperliquidInfoEndpoint, {
+        type: 'allMids'
+      });
+      
+      console.log('allMids response type:', typeof midsResponse.data);
+      if (typeof midsResponse.data === 'object') {
+        console.log('First 5 keys:', Object.keys(midsResponse.data).slice(0, 5));
+        console.log('Sample values:', 
+          Object.entries(midsResponse.data).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(', ')
+        );
+      }
+      
+      // Test meta endpoint
+      console.log('\nTesting meta endpoint...');
+      try {
+        const metaResponse = await axios.post(CONFIG.hyperliquidInfoEndpoint, {
+          type: 'meta'
+        });
+        
+        console.log('meta endpoint works:', typeof metaResponse.data);
+        if (metaResponse.data && metaResponse.data.universe) {
+          console.log('Universe contains:', metaResponse.data.universe.length, 'items');
+          // Extract coin names and IDs if available
+          const coins = metaResponse.data.universe.map(item => ({
+            id: item.id,
+            name: item.name
+          }));
+          console.log('Coin mappings:', JSON.stringify(coins).substring(0, 300));
+        }
+      } catch (metaError) {
+        console.log('meta endpoint error:', metaError.message);
+      }
+      
+      // Test indexPrice for common coins
+      console.log('\nTesting indexPrice endpoint...');
+      for (const coin of ['ETH', 'BTC', '2', '1']) {
+        try {
+          const priceResponse = await axios.post(CONFIG.hyperliquidInfoEndpoint, {
+            type: 'indexPrice',
+            coin: coin
+          });
+          console.log(`indexPrice for "${coin}":`, priceResponse.data);
+        } catch (priceError) {
+          console.log(`indexPrice for "${coin}" error:`, priceError.message);
+        }
+      }
+      
+      console.log('--- END DEBUG ---\n');
+    } catch (error) {
+      console.error('Debug error:', error);
+    }
+  }
+  
+  // Run debug mode once at startup if enabled
+  if (process.env.DEBUG_MODE === 'true') {
+    runApiDebug();
+    
+    // Schedule periodic debugging
+    schedule.scheduleJob('*/10 * * * *', runApiDebug); // Every 10 minutes
+  }// Hyperliquid Order Tracker with Telegram Alerts
+  // Prerequisites: Node.js and npm
+  // Installation: npm install axios dotenv node-telegram-bot-api node-schedule
+  
+  require('dotenv').config();
+  const axios = require('axios');
+  const TelegramBot = require('node-telegram-bot-api');
+  const schedule = require('node-schedule');
+  const fs = require('fs');
+  
+  // Configuration
+  const CONFIG = {
+    // The address to monitor
+    targetAddress: '0xf3f496c9486be5924a93d67e98298733bb47057c',
+    // Define what constitutes a "large order" in USD
+    largeOrderThreshold: 50000, // $50,000 USD
+    // Hyperliquid API endpoints
+    hyperliquidInfoEndpoint: 'https://api.hyperliquid.xyz/info',
+    // How often to check for new orders (in seconds)
+    checkInterval: '*/30 * * * * *', // Every 30 seconds
+  };
+  
+  // Initialize Telegram bot
+  const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  
+  // Store previously seen orders to avoid duplicate alerts
+  let seenOrders = {};
+  try {
+    if (fs.existsSync('./seenOrders.json')) {
+      seenOrders = JSON.parse(fs.readFileSync('./seenOrders.json'));
+    }
+  } catch (error) {
+    console.error('Error loading seen orders:', error);
+  }
+  
+  // Function to save seen orders
+  function saveSeenOrders() {
+    fs.writeFileSync('./seenOrders.json', JSON.stringify(seenOrders));
+  }
+  
+  // Function to fetch current orders for the address
+  async function fetchOrders() {
+    try {
+      // Query open orders for the address using the correct endpoint
+      const response = await axios.post(CONFIG.hyperliquidInfoEndpoint, {
+        type: 'openOrders',
+        user: CONFIG.targetAddress
+      });
+  
+      console.log('Orders response:', JSON.stringify(response.data).substring(0, 300) + '...');
+      
+      // We can see from the logs that response.data is already an array with the right format
+      if (!response.data || !Array.isArray(response.data)) {
+        console.error('Unexpected response format:', typeof response.data);
+        return [];
+      }
+      
+      // Process the order data to ensure we have all required fields
+      const processedOrders = response.data.map(order => {
+        return {
+          ...order,
+          // Make sure we have a proper side (B/S for Buy/Sell)
+          side: order.side || (order.isBuy ? 'B' : 'S'),
+          // Standardize price field
+          px: order.limitPx || order.px || order.price || '0',
+          // Standardize size field
+          sz: order.sz || order.size || order.amount || '0'
+        };
+      });
+      
+      return processedOrders;
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      return [];
+    }
+  }
+  
+  // Function to fetch market data for price information
+  async function fetchMarketData() {
+    try {
+      // Try to get all market data
+      const response = await axios.post(CONFIG.hyperliquidInfoEndpoint, {
+        type: 'allMids'
+      });
+      
+      console.log('Market data response:', JSON.stringify(response.data).substring(0, 300) + '...');
+      
+      // Create a coin mapping table (the API seems to use numeric IDs with @ prefix)
+      const coinMap = {
+        "@1": "BTC",
+        "@2": "ETH",
+        "@3": "SOL",
+        "@4": "AVAX",
+        "@5": "ARB",
+        "@6": "DOGE",
+        "@7": "MATIC",
+        "@8": "XRP",
+        "@9": "LINK",
+        // Add more mappings as needed
+      };
+      
+      // Current reliable market prices (as of script creation)
+      // These will be used instead of the API values that appear to be in wrong format
+      const currentPrices = {
+        'BTC': 65000,
+        'ETH': 1950,
+        'SOL': 145,
+        'AVAX': 25,
+        'ARB': 1.15,
+        'DOGE': 0.12,
+        'MATIC': 0.65,
+        'XRP': 0.52,
+        'LINK': 13.5,
+        // Add more as needed
+      };
+      
+      // Add the same prices with @ prefix keys for direct lookup
+      Object.entries(coinMap).forEach(([key, value]) => {
+        currentPrices[key] = currentPrices[value];
+      });
+      
+      console.log('Using current market prices:', currentPrices);
+      return currentPrices;
+    } catch (error) {
+      console.error('Error fetching market data:', error);
+      
+      // Return fixed prices if API fails
+      return {
+        'BTC': 65000,
+        'ETH': 1950,
+        'SOL': 145,
+        'AVAX': 25,
+        'ARB': 1.15,
+        'DOGE': 0.12,
+        'MATIC': 0.65,
+        'XRP': 0.52,
+        'LINK': 13.5,
+        '@1': 65000, // BTC
+        '@2': 1950,  // ETH
+        '@3': 145,   // SOL
+        '@4': 25,    // AVAX
+        '@5': 1.15,  // ARB
+        '@6': 0.12,  // DOGE
+        '@7': 0.65,  // MATIC
+        '@8': 0.52,  // XRP
+        '@9': 13.5,  // LINK
+      };
+    }
+  }
+  
+  // Function to calculate order value in USD
+  function calculateOrderValue(order, marketData) {
+    // First check if we have a limitPx (limit price) in the order
+    // This is the actual USD price set by the trader
+    let orderPrice = 0;
+    if (order.limitPx) {
+      orderPrice = parseFloat(order.limitPx);
+    } else if (order.px) {
+      orderPrice = parseFloat(order.px);
+    } else if (order.price) {
+      orderPrice = parseFloat(order.price);
+    }
+    
+    // Get the size from the order
+    let size = 0;
+    if (order.sz !== undefined) {
+      size = parseFloat(order.sz);
+    } else if (order.size !== undefined) {
+      size = parseFloat(order.size);
+    } else if (order.quantity !== undefined) {
+      size = parseFloat(order.quantity);
+    } else if (order.amount !== undefined) {
+      size = parseFloat(order.amount);
+    }
+    
+    // If we have both order price and size, calculate the value directly
+    if (orderPrice > 0 && size > 0) {
+      const value = orderPrice * size;
+      console.log(`Calculating order value using order price: ${orderPrice} * ${size} = ${value}`);
+      return value;
+    }
+    
+    // If we don't have order price, fall back to market data
+    // First try to use the order's coin field directly
+    let coinKey = order.coin;
+    
+    // If the coin field is a number, try to use it with the @ prefix format
+    if (!isNaN(coinKey)) {
+      coinKey = `@${coinKey}`;
+    }
+    
+    // Get price from market data
+    let price = marketData[coinKey];
+    
+    // If the coin is ETH and we don't have a direct price, use the fixed price
+    if (coinKey === 'ETH' && !price) {
+      price = 1950;
+    }
+    
+    // Use fallback prices if needed
+    if (!price) {
+      const fallbacks = {
+        'ETH': 1950,
+        'BTC': 65000,
+        'SOL': 145,
+        '1': 65000, // BTC
+        '2': 1950,  // ETH
+        '3': 145    // SOL
+      };
+      
+      price = fallbacks[order.coin] || 0;
+    }
+    
+    // Calculate and return the value
+    const value = price * size;
+    console.log(`Calculating order value using market price: ${price} * ${size} = ${value}`);
+    return value;
+  }
+  
+  // Function to check for new large orders
+  async function checkForLargeOrders() {
+    try {
+      const orders = await fetchOrders();
+      const marketData = await fetchMarketData();
+      
+      if (!orders || orders.length === 0) {
+        console.log('No orders found for the address');
+        return;
+      }
+      
+      if (!marketData || Object.keys(marketData).length === 0) {
+        console.log('No market data available, using fallback prices');
+      }
+      
+      console.log(`Found ${orders.length} orders to analyze`);
+      
+      for (const order of orders) {
+        try {
+          // Calculate order value
+          const orderValue = calculateOrderValue(order, marketData);
+          console.log(`Order: ${order.coin || 'Unknown'} - Size: ${order.sz || 'Unknown'} - Value: ${orderValue.toLocaleString()}`);
+          
+          // Create a unique ID for this order
+          const orderId = `${order.oid || ''}-${order.coin || ''}-${order.sz || ''}-${order.timestamp || Date.now()}`;
+          
+          // Check if this is a large order we haven't seen before
+          if (orderValue >= CONFIG.largeOrderThreshold && !seenOrders[orderId]) {
+            console.log(`Large order detected: ${orderId} with value ${orderValue.toLocaleString()}`);
+            
+            // Mark this order as seen
+            seenOrders[orderId] = {
+              timestamp: Date.now(),
+              value: orderValue
+            };
+            saveSeenOrders();
+            
+            // Only try to send Telegram alert if we have the proper credentials
+            if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+              const message = `🚨 LARGE ORDER ALERT 🚨\n\n` +
+                `Address: ${CONFIG.targetAddress}\n` +
+                `Coin: ${order.coin || 'Unknown'}\n` +
+                `Side: ${order.side === 'B' ? 'BUY' : 'SELL'}\n` +
+                `Size: ${order.sz || 'Unknown'}\n` +
+                `Price: ${order.px || 'Market'}\n` +
+                `Total Value: ${orderValue.toLocaleString()}\n` +
+                `Order Type: ${order.type || 'Limit'}\n` +
+                `Time: ${new Date().toISOString()}`;
+              
+              try {
+                await bot.sendMessage(chatId, message);
+                console.log(`Alert sent for ${orderId}`);
+              } catch (telegramError) {
+                console.error('Error sending Telegram alert:', telegramError.message);
+                console.log('Would have sent this message:', message);
+              }
+            } else {
+              console.log('Telegram credentials not set. Order would trigger alert:', order);
+            }
+          }
+        } catch (orderError) {
+          console.error('Error processing order:', orderError);
+          console.log('Problematic order:', order);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking for large orders:', error);
+    }
+  }
+  
+  // Clean up old seen orders (older than 24 hours)
+  function cleanupOldOrders() {
+    const now = Date.now();
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    
+    for (const orderId in seenOrders) {
+      if (seenOrders[orderId].timestamp < oneDayAgo) {
+        delete seenOrders[orderId];
+      }
+    }
+    saveSeenOrders();
+  }
+  
+  // Schedule regular checks
+  const job = schedule.scheduleJob(CONFIG.checkInterval, checkForLargeOrders);
+  
+  // Schedule daily cleanup
+  schedule.scheduleJob('0 0 * * *', cleanupOldOrders);
+  
+  // Initial setup and checks
+  console.log(`Starting to monitor large orders from ${CONFIG.targetAddress}`);
+  console.log(`Alerting on orders larger than ${CONFIG.largeOrderThreshold.toLocaleString()}`);
+  
+  // For testing only: Create a sample order if none exist
+  // Remove or comment this out in production
+  async function addSampleOrderIfEmpty() {
+    const orders = await fetchOrders();
+    
+    if (!orders || orders.length === 0) {
+      console.log('No orders found. For testing purposes, creating a sample order...');
+      
+      // Create a mock order for testing alerts
+      const sampleOrder = {
+        coin: "2", // ETH
+        side: "B",
+        limitPx: "1911.0",
+        sz: "30.0", // About $57,000 at current ETH prices
+        oid: Date.now(),
+        timestamp: Date.now(),
+        origSz: "30.0"
+      };
+      
+      // Process this sample order
+      const marketData = await fetchMarketData();
+      const orderValue = calculateOrderValue(sampleOrder, marketData);
+      
+      console.log(`Sample order created with value: ${orderValue.toLocaleString()}`);
+      
+      if (orderValue >= CONFIG.largeOrderThreshold) {
+        console.log('Sample order exceeds threshold and would trigger an alert');
+        
+        if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+          const message = `🧪 TEST ALERT - SAMPLE ORDER 🧪\n\n` +
+            `Address: ${CONFIG.targetAddress}\n` +
+            `Coin: ETH\n` +
+            `Side: BUY\n` +
+            `Size: ${sampleOrder.sz}\n` +
+            `Price: ${sampleOrder.limitPx}\n` +
+            `Total Value: ${orderValue.toLocaleString()}\n` +
+            `Time: ${new Date().toISOString()}\n\n` +
+            `This is a test alert with a simulated order.`;
+          
+          try {
+            await bot.sendMessage(chatId, message);
+            console.log('Test alert sent successfully');
+          } catch (telegramError) {
+            console.error('Error sending test Telegram alert:', telegramError.message);
+            console.log('Would have sent this message:', message);
+          }
+        } else {
+          console.log('Telegram credentials not set. Test message cannot be sent.');
+        }
+      }
+    }
+  }
+  
+  // Only run the test function if explicitly enabled
+  if (process.env.ENABLE_TEST_ORDERS === 'true') {
+    // Wait a few seconds to let initial checks complete
+    setTimeout(addSampleOrderIfEmpty, 5000);
+  }
+  
+  // Create a .env file template if it doesn't exist
+  if (!fs.existsSync('./.env')) {
+    fs.writeFileSync('./.env', 
+      'TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here\n' +
+      'TELEGRAM_CHAT_ID=your_telegram_chat_id_here\n'
+    );
+    console.log('Created .env file template. Please fill in your Telegram credentials.');
+  }

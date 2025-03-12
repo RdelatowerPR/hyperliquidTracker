@@ -13,6 +13,8 @@ A Node.js application that monitors specific Ethereum addresses on the Hyperliqu
 - Duplicate alert prevention
 - Auto-cleanup of old order history
 
+- * need to update auto price fetching. I have it with some default values for the coins.
+
 ## Installation
 
 ### Prerequisites

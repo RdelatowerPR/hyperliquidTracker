@@ -1,9 +1,12 @@
 # Environment variables
 .env
+keys.txt
 
 # Runtime data
 seenOrders.json
 *.json.backup-*
+*.corrupt-*
+*.tmp
 
 # Logs
 logs

@@ -1,0 +1,7 @@
+.env
+.git
+.github
+node_modules
+seenOrders.json
+*.log
+test

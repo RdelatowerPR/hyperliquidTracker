@@ -1,19 +1,29 @@
 {
   "name": "hyperliquid-tracker",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Real-time Hyperliquid large-order alerts delivered through Telegram.",
+  "main": "tracker.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node tracker.js",
+    "check": "node --check tracker.js && node --test",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "audit": "npm audit --omit=dev --audit-level=high"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "hyperliquid",
+    "telegram",
+    "order-tracker"
+  ],
+  "author": "Raul Antonio",
+  "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "axios": "^1.8.3",
-    "dotenv": "^16.4.7",
-    "node-schedule": "^2.1.1",
-    "node-telegram-bot-api": "^0.66.0"
+    "dotenv": "^17.4.2",
+    "ws": "^8.21.3"
   }
 }

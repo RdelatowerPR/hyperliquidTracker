@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Configure Git default branch
+        run: git config --global init.defaultBranch main
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
